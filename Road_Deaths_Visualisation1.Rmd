@@ -1,0 +1,663 @@
+---
+title: "Road Deaths in Australia | R Visual Story"
+output:
+  pdf_document:
+    toc: true
+  html_notebook:
+    toc: true
+    toc_float: true
+---
+
+<style>
+.main-container {max-width:1450px !important; width:calc(100% - 60px) !important;}
+.main-container img, .main-container .html-widget {max-width:100% !important;}
+.main-container .html-widget {min-height:560px;}
+@media(max-width:800px){.main-container{width:calc(100% - 20px) !important;}}
+</style>
+
+**STAT8124 | Research question:** Australia aims to halve road deaths by 2030. Who is dying, where and when, and which groups account for the most recorded fatalities?
+
+**Source:** BITRE Australian Road Deaths Database, June 2026. **Unit:** one person killed per record, not one crash. **Period:** 1989–2025 for long run trends, 2017–2025 for detailed comparisons; 2026 is partial. Charts show fatality **counts**, not exposure adjusted risk or causal effects.
+
+The notebook follows the PDF in five chapters: **A. Problem → B. Who → C. Where → D. When → E. Priorities**. Every chart includes what it shows, interpretation of the evidence, a link to the research question, design rationale, and a limitation. Interactive charts open in the RStudio Viewer or a browser.
+
+## A. The problem — progress towards 2030
+
+```{r}
+# STAT8124 — Road deaths in Australia
+
+# Source: ARDD_Fatalities_Cleaned_Jun2026.csv
+
+packages <- c('tidyverse','scales','ggridges','plotly','htmlwidgets','lubridate','zoo')
+new_packages <- packages[!vapply(packages, requireNamespace, logical(1), quietly=TRUE)]
+if(length(new_packages)) install.packages(new_packages)
+invisible(lapply(packages, library, character.only=TRUE))
+
+file <- 'ARDD_Fatalities_Cleaned_Jun2026.csv'
+if (!file.exists(file)) file <- file.choose()
+out <- 'STAT8124_R1_Figures'
+dir.create(out, showWarnings=FALSE)
+
+# All fields used below exist in the uploaded cleaned CSV. Crash ID MUST remain text.
+fatal <- readr::read_csv(file, col_types=cols(`Crash ID`=col_character(), .default=col_guess()), show_col_types=FALSE) %>%
+  rename_with(~tolower(gsub('[^A-Za-z0-9]+','_',.x))) %>%
+  mutate(
+    year=as.integer(year), month=as.integer(month), age=as.numeric(age),
+    speed_limit=as.numeric(speed_limit), crash_hour=as.integer(crash_hour),
+    dayweek=factor(dayweek, levels=c('Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday')),
+    age_group=factor(na_if(age_group,'Unknown'),levels=c('0-16','17-25','26-39','40-64','65-74','75+')),
+    road_user_group=na_if(road_user_group,'Unknown'),
+    road_user_group=case_when(road_user_group=='Pedal cyclist'~'Cyclist',TRUE~road_user_group),
+    remoteness_group=na_if(remoteness_group,'Unknown'),
+    remoteness=na_if(national_remoteness_areas_2021,'Unknown'),
+    lga=na_if(national_lga_name_2021,'Unknown'),
+    gender=na_if(gender,'Unknown')
+  )
+stopifnot(nrow(fatal)==58837, sum(fatal$year==2025,na.rm=TRUE)==1309)
+core <- fatal %>% filter(between(year,2017,2025))
+baseline <- 1142 # 2018–2020 annual average, National Road Safety Strategy
+navy <- '#17365D'; blue <- '#438CD1'; orange <- '#EF7544'; green <- '#27865C'
+base_theme <- theme_minimal(base_size=12) + theme(plot.title=element_text(face='bold',colour=navy,size=17,margin=margin(b=8)),plot.subtitle=element_text(colour='#4B5563',size=10.5,margin=margin(b=10)),plot.caption=element_text(colour='#64748B',size=8,hjust=0),panel.grid.minor=element_blank(),panel.grid.major.y=element_blank(),legend.position='bottom',plot.margin=margin(15,18,12,15))
+save_plot <- function(p,name,w=11,h=6.5) {print(p);ggsave(file.path(out,paste0(name,'.png')),p,width=w,height=h,dpi=240,bg='white')}
+fmt <- scales::comma
+source_caption <- 'Source: BITRE ARDD (June 2026) | People killed, not all crashes | Counts are not exposure-adjusted'
+base_theme <- base_theme + theme(plot.title.position='plot', plot.caption.position='plot', strip.text=element_text(face='bold',size=10), axis.text=element_text(colour='#26364B'), plot.margin=margin(22,35,20,22))
+# Wrap longer titles automatically and allow labels beyond chart limits.
+wrap_title <- function(x,width=72) stringr::str_wrap(x,width=width)
+# Show numeric evidence used in the accompanying interpretation
+show_insight <- function(label, data) {cat('\n',label,'\n');print(data)}
+```
+
+```{r}
+# A1 — Annual fatalities and illustrative target path 
+annual <- fatal %>% filter(year<=2025) %>% count(year,name='deaths')
+target <- tibble(year=2020:2030,target=seq(baseline,570,length.out=11))
+p <- ggplot(annual,aes(year,deaths)) +
+  geom_col(aes(fill=year==2025),width=.82) +
+  scale_fill_manual(values=c('FALSE'='#86B6E6','TRUE'=orange),guide='none') +
+  geom_line(data=target,aes(year,target),inherit.aes=FALSE,linetype='dashed',colour=green,linewidth=1.1) +
+  geom_point(data=target %>% filter(year==2030),aes(year,target),inherit.aes=FALSE,colour=green,size=4) +
+  annotate('text',x=2025,y=1395,label='2025: 1,309',colour=orange,fontface='bold',size=4) +
+  annotate('label',x=2028.0,y=350,label='2030 target: <571',colour=green,
+           fill='white',label.size=0,fontface='bold',size=3.8) +
+  labs(title='A1 | Road deaths fell for decades, then began rising again',
+       subtitle='Annual deaths, 1989–2025 | Dashed line is an illustrative path, not official yearly targets',
+       x=NULL,y='People killed',caption=source_caption) +
+  scale_x_continuous(breaks=seq(1990,2030,5),limits=c(1988,2031)) +
+  scale_y_continuous(expand=expansion(mult=c(.03,.08))) + base_theme
+p <- p + labs(title='A1 | Road deaths fell for decades, then rose again') +
+  theme(plot.title=element_text(size=15),plot.subtitle=element_text(size=9.5),plot.margin=margin(24,38,24,28))
+save_plot(p,'A1_Annual_Deaths_Target',15,8.5)
+
+```
+
+**What the chart shows.** The bars count Australians killed on roads each year from 1989 to 2025. The orange bar isolates 2025; the dashed green line illustrates the straight line reduction that would connect the 2018–2020 baseline with the 2030 target.
+
+**Interpretation and evidence.** The 2025 total of **1,309** is **167 deaths (14.6%) above** the baseline of 1,142, and **212 (19.3%) above** the 2020 total of 1,097. To reach fewer than 571 deaths by 2030, the annual count would need to fall by at least 739 from 2025 (approximately 56.5%). This indicates that recent progress is not aligned with the required direction, although the chart alone cannot forecast 2030.
+
+**Contribution to the research question.** This establishes **why** the project matters: the national target is not yet reflected in recent fatality totals. Sections B to E investigate the people, places and times behind those totals.
+
+**Visual design.** Annual bars support year-to-year comparison, while one highlighted bar and a labelled target keep attention on the decision relevant contrast.
+
+**Interpretation caution.** The green path is illustrative rather than an official annual target; fatalities are counts, not population or travel adjusted risk.
+
+
+```{r}
+# A2 — States compared with their own 2018–2020 baseline 
+state_annual <- fatal %>% filter(between(year,2017,2025)) %>% count(state,year,name='deaths')
+state_base <- state_annual %>% filter(between(year,2018,2020)) %>% group_by(state) %>%
+  summarise(base=mean(deaths),.groups='drop')
+state_annual <- left_join(state_annual,state_base,by='state')
+state_labels <- state_annual %>% filter(year==2025) %>%
+  mutate(change_pct=100*(deaths/base-1),
+         panel=paste0(state,' (',sprintf('%+.0f%%',change_pct),')')) %>% select(state,panel)
+state_annual <- left_join(state_annual,state_labels,by='state')
+p <- ggplot(state_annual,aes(year,deaths)) + geom_line(colour=blue,linewidth=.95) +
+  geom_hline(aes(yintercept=base),linetype='dashed',colour='#808C9B') +
+  geom_point(data=filter(state_annual,year==2025),colour=orange,size=2.6) +
+  facet_wrap(~panel,scales='free_y',ncol=4) +
+  scale_x_continuous(breaks=c(2017,2021,2025)) +
+  labs(title='A2 | 2025 fatalities versus each state’s own baseline',
+       subtitle='Panel titles: percentage change from 2018–2020 annual average to 2025 | Free y-axis scales',
+       x=NULL,y='People killed',caption=source_caption) + base_theme +
+  theme(strip.text=element_text(size=10,face='bold'))
+save_plot(p,'A2_State_Small_Multiples',14,8)
+show_insight('A2  2025 state changes (%)',state_annual %>% filter(year==2025) %>%
+  transmute(state,baseline=round(base,1),deaths,change_pct=round(100*(deaths/base-1),1)))
+```
+
+**What the chart shows.** Each small panel plots annual fatalities for one state or territory from 2017 to 2025. The dashed horizontal line is that jurisdiction's **average annual fatalities in 2018–2020**; the panel heading reports its 2025 percentage difference from that baseline.
+
+**Interpretation and evidence.** A positive percentage in the panel heading means the 2025 count exceeds the jurisdiction's own baseline; a negative percentage means it is below baseline. Use the printed **A2 state changes** table to quote the largest increases and decreases rather than judging by visual height alone. The key finding is whether national deterioration is widespread or concentrated in particular jurisdictions.
+
+**Contribution to the research question.** A2 moves from the national result in A1 to **where progress differs**, helping identify jurisdictions that warrant closer investigation before choosing interventions.
+
+**Visual design.** Small multiples keep the same time window and reference line meaning across states, making within-state change easier to see.
+
+**Interpretation caution.** The panels use independent vertical scales, so compare the labelled percentages not apparent line height —between states. These are counts, not rates.
+
+
+```{r}
+# A3 — INTERACTIVE rolling 12-month total, computed from monthly records
+# The CSV lacks exact dates; use the first of each month ONLY as a plotting anchor.
+monthly <- fatal %>% filter(between(year,2009,2026),!is.na(month)) %>%
+  count(year,month,name='deaths') %>%
+  mutate(date=as.Date(sprintf('%04d-%02d-01',year,month))) %>%
+  arrange(date) %>%
+  mutate(rolling_12_months=zoo::rollsum(deaths,12,fill=NA,align='right'))
+interactive_A3 <- plotly::plot_ly(
+  monthly,x=~date,y=~rolling_12_months,type='scatter',mode='lines',
+  name='Rolling 12-month fatalities',line=list(color=orange,width=3),
+  text=~paste0('Month: ',format(date,'%b %Y'),
+               '<br>Rolling 12 month fatalities: ',fmt(rolling_12_months),
+               '<br>Fatalities in this month: ',fmt(deaths)),
+  hoverinfo='text') %>%
+  plotly::layout(title=list(text='A3 | Rolling 12 month road fatalities',x=.05,font=list(size=19)),
+                 xaxis=list(title='',rangeslider=list(visible=TRUE,thickness=.10)),
+                 yaxis=list(title='Deaths in preceding 12 months',automargin=TRUE),
+                 margin=list(l=90,r=35,t=95,b=105),
+                 paper_bgcolor='white',plot_bgcolor='white',autosize=TRUE) %>%
+  plotly::config(responsive=TRUE)
+# Wide, tall widget both in the notebook and the saved interactive HTML
+interactive_A3 <- htmlwidgets::onRender(interactive_A3,
+  "function(el,x){el.style.minHeight='620px';el.style.width='100%';}")
+htmlwidgets::saveWidget(interactive_A3,file.path(out,'A3_Interactive_Monthly_Rolling.html'),selfcontained=FALSE)
+print(interactive_A3)
+```
+
+**What the chart shows.** The interactive chart contains monthly fatality counts and the total deaths in the preceding **12 months**, calculated from monthly records. The slider changes the period displayed and hover reveals individual values.
+
+**Interpretation and evidence.** The rolling total smooths seasonal fluctuations: a sustained rise indicates that the most recent 12 month period contains more deaths than earlier overlapping periods. In your presentation, hover over the latest **complete** month and an earlier comparable month and quote the actual values shown, rather than relying on a visual impression.
+
+**Contribution to the research question.** A3 checks whether the recent direction seen in A1 is a persistent pattern or merely a single unusual year. This helps assess progress towards 2030.
+
+**Visual design.** Interaction supports focused comparison without crowding the full historical view.
+
+**Interpretation caution.** The monthly series and 12-month total have different magnitudes on a shared axis, so the monthly line will appear compressed; use hover for monthly values. The CSV does not contain exact crash dates, and 2026 is incomplete/preliminary.
+
+
+## B. Who is dying?
+
+```{r}
+# B1 — Back-to-back bars: male left, female right 
+b1 <- core %>% filter(!is.na(age_group),gender %in% c('Male','Female')) %>%
+  count(age_group,gender,name='deaths') %>% mutate(signed=if_else(gender=='Male',-deaths,deaths))
+p <- ggplot(b1,aes(age_group,signed,fill=gender)) +
+  geom_col(width=.74) +
+  geom_text(aes(label=fmt(deaths),hjust=if_else(signed<0,1.12,-.12)),
+            size=3.6,fontface='bold',colour=navy,show.legend=FALSE) +
+  coord_flip(clip='off') +
+  scale_fill_manual(values=c('Female'=orange,'Male'=blue)) +
+  scale_y_continuous(labels=function(x)fmt(abs(x)),expand=expansion(mult=c(.20,.20))) +
+  labs(title='B1 | Male fatalities outnumber female fatalities across age groups',
+       subtitle='2017–2025 | Values are fatality counts | Male left, female right',
+       x=NULL,y='People killed',fill=NULL,caption=source_caption) + base_theme
+p <- p + labs(title='B1 | Male fatalities exceed female fatalities by age') +
+  theme(plot.title=element_text(size=15),plot.subtitle=element_text(size=10),
+        plot.margin=margin(24,48,24,30))
+save_plot(p,'B1_Age_Sex_BackToBack',15,8.5)
+show_insight('B1 Counts by age and gender',b1 %>% select(age_group,gender,deaths))
+```
+
+**What the chart shows.** Mirrored horizontal bars show **numbers of deaths** for male and female people within each age band during 2017–2025. The printed numbers are counts, not percentages or population rates.
+
+**Interpretation and evidence.** Around **three quarters of recorded deaths were male**, and ages **40–64** had the largest age-group count in the supplied analysis. Compare the male and female values within the same age band to explain which age bands contribute most to the gender gap. A large count reflects both the number of people exposed and any underlying risk; it does not separate those effects.
+
+**Contribution to the research question.** B1 answers **who is dying** and establishes demographic groups for deeper comparison in B2, B3 and E1.
+
+**Visual design.** The common central axis and direct numerical labels make gender differences within each age band explicit.
+
+**Interpretation caution.** Do not call males or any age band 'more at risk' without population, licensing or travel exposure denominators.
+
+
+```{r}
+# B2 — Dumbbell: baseline average versus 2025, separately for road user and age 
+
+compare_group <- function(var){
+  fatal %>% filter(between(year,2018,2020)|year==2025,!is.na(.data[[var]])) %>%
+    count(year,group=as.character(.data[[var]]),name='deaths') %>%
+    tidyr::complete(group,year=c(2018:2020,2025),fill=list(deaths=0)) %>%
+    group_by(group) %>% summarise(baseline=mean(deaths[year %in% 2018:2020]),
+                                 latest=deaths[year==2025][1],.groups='drop') %>%
+    mutate(change_pct=if_else(baseline>0,100*(latest/baseline-1),NA_real_))
+}
+plot_b2 <- function(dat,title,file){
+  dat <- dat %>% mutate(group=forcats::fct_reorder(group,latest))
+  p <- ggplot(dat,aes(y=group)) +
+    geom_segment(aes(x=baseline,xend=latest,yend=group),colour='#9EACBA',linewidth=1.4) +
+    geom_point(aes(x=baseline),colour=blue,size=3.5) +
+    geom_point(aes(x=latest),colour=orange,size=3.5) +
+    geom_text(aes(x=pmax(baseline,latest),label=sprintf('%+.0f%%',change_pct)),
+              hjust=-.25,size=3.6,fontface='bold',colour=navy,na.rm=TRUE) +
+    scale_x_continuous(expand=expansion(mult=c(.04,.26))) +
+    labs(title=title,subtitle='Blue = 2018–2020 annual average | Orange = 2025 | Label = percentage change',
+         x='Annual fatalities',y=NULL,caption=source_caption) + base_theme
+  save_plot(p,file,11,6.5)
+}
+b2_road <- compare_group('road_user_group')
+b2_age <- compare_group('age_group')
+plot_b2(b2_road,'B2a | Road user changes since the baseline','B2a_Road_User_Dumbbell')
+plot_b2(b2_age,'B2b | Age group changes since the baseline','B2b_Age_Group_Dumbbell')
+show_insight('B2a  Road user changes',b2_road)
+show_insight('B2b  Age group changes',b2_age)
+```
+
+**What B2a shows — road users.** The first dumbbell chart compares the **average annual fatalities in 2018–2020** with the **2025 count** separately for drivers, passengers, motorcyclists, pedestrians and other road-user categories represented in the chart.
+
+**What B2b shows — age groups.** The second dumbbell makes the same comparison for age bands, without mixing demographic and roadnuser categories on one axis.
+
+**Interpretation and evidence.** For each row, the distance between the two endpoints is the **absolute change in deaths**; any printed percentage expresses change relative to that group's baseline. Read the B2a and B2b evidence tables to identify the largest *absolute* increases as well as the largest *relative* increases. The PDF highlights changes among vulnerable road users and older age groups; the exact ranking should come from the notebook's computed values.
+
+**Contribution to the research question.** These charts connect **who** with **progress**: they show which groups are contributing to movement away from, or towards, the national reduction goal. They are more actionable than a demographic snapshot alone.
+
+**Visual design.** Separating road users from ages avoids confusing two different classification systems and improves label readability.
+
+**Interpretation caution.** Percentage growth from a small baseline can look dramatic while involving relatively few additional deaths. Prioritisation should consider both count and percentage change.
+
+
+```{r}
+
+# B3 — Age distribution by road-user group
+
+b3 <- core %>% filter(!is.na(age), between(age, 0, 105), road_user_group %in% c("Driver", "Passenger", "Motorcyclist", "Pedestrian", "Cyclist"))
+
+# Calculate median ages
+b3_medians <- b3 %>%
+  group_by(road_user_group) %>%
+  summarise(
+    median_age = median(age, na.rm = TRUE),
+    deaths = n(),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(median_age))
+
+# Order groups so highest median appears at top
+median_order <- b3_medians$road_user_group
+
+b3 <- b3 %>%
+  mutate(
+    road_user_group = factor(
+      road_user_group,
+      levels = rev(median_order)
+    )
+  )
+
+b3_medians <- b3_medians %>%
+  mutate(
+    road_user_group = factor(
+      road_user_group,
+      levels = rev(median_order)
+    )
+  )
+
+# Create ridgeline chart
+p <- ggplot(
+  b3,
+  aes(
+    x = age,
+    y = road_user_group,
+    fill = road_user_group
+  )
+) +
+  ggridges::geom_density_ridges(
+    alpha = 0.78,
+    scale = 1.2,
+    bandwidth = 5,
+    colour = "white",
+    linewidth = 0.35
+  ) +
+  geom_point(
+    data = b3_medians,
+    aes(x = median_age, y = road_user_group),
+    inherit.aes = FALSE,
+    colour = orange,
+    fill = "white",
+    shape = 21,
+    stroke = 1.2,
+    size = 3.5
+  ) +
+  geom_label(
+    data = b3_medians,
+    aes(
+      x = median_age,
+      y = road_user_group,
+      label = paste0("Median: ", round(median_age), " years")
+    ),
+    inherit.aes = FALSE,
+    nudge_x = 10,
+    size = 3,
+    colour = navy,
+    fill = "white",
+    label.size = 0
+  ) +
+  scale_x_continuous(
+    breaks = seq(0, 100, 10),
+    limits = c(0, 115)
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Driver" = "#3B82C4",
+      "Passenger" = "#77B5E8",
+      "Motorcyclist" = "#245F9B",
+      "Pedestrian" = "#5B9ED8",
+      "Cyclist" = "#94C5E9"
+    ),
+    guide = "none"
+  ) +
+  labs(
+    title = "B3 | Median age varies across road user groups",
+    subtitle = "Australian road fatalities, 2017–2025 | Ordered by median age",
+    x = "Age at death (years)",
+    y = NULL,
+    caption = source_caption
+  ) +
+  base_theme +
+  theme(
+    plot.title = element_text(face = "bold"),
+    axis.text.y = element_text(face = "bold", size = 11)
+  )
+
+save_plot(p, "B3_Age_Ridgeline", 12, 7)
+show_insight("B3  Observed median ages", b3_medians)
+
+```
+
+**What the chart shows.** This ridgeline chart compares the age distributions of five road user groups during 2017–2025, arranged from highest to lowest median age. The orange dots identify each group's median age, while the curves illustrate how fatalities are distributed across ages.
+
+**Interpretation and evidence.** Pedestrians and cyclists have older median ages at death (approximately 54 years), whereas passengers have a substantially younger median (approximately 31 years). This demonstrates that the age profile of road fatalities differs across road user groups.
+
+**Contribution to the research question.** B3 deepens the answer to **who is dying** by showing how age and road-user type interact. It helps motivate more specific groups in the E1 priority analysis.
+
+**Visual design.** Density ridges reveal clustering and spread that would be hidden by a table of medians alone.
+
+**Interpretation caution.** Ridge heights are density scaled; they do **not** represent equal or comparable numbers of deaths across categories.
+
+
+## C. Where do fatalities occur?
+
+```{r}
+# C1 — Remoteness x posted speed limit heatmap 
+rem_levels <- c('Major Cities of Australia','Inner Regional Australia','Outer Regional Australia',
+                'Remote Australia','Very Remote Australia')
+c1_valid <- core %>% filter(remoteness %in% rem_levels,!is.na(speed_limit)) %>%
+  mutate(remoteness=factor(remoteness,levels=rev(rem_levels)),
+         speed_band=case_when(speed_limit<=50~'≤50 km/h',speed_limit<=70~'60–70 km/h',
+                              speed_limit<=90~'75–90 km/h',TRUE~'100+ km/h'),
+         speed_band=factor(speed_band,levels=c('≤50 km/h','60–70 km/h','75–90 km/h','100+ km/h')))
+c1 <- c1_valid %>% count(remoteness,speed_band,name='deaths') %>%
+  tidyr::complete(remoteness,speed_band,fill=list(deaths=0)) %>%
+  mutate(share=100*deaths/nrow(core),
+         label=paste0(fmt(deaths),'\n(',sprintf('%.1f%%',share),')'))
+regional_share <- 100*sum(core$remoteness_group=='Regional and remote',na.rm=TRUE)/nrow(core)
+p <- ggplot(c1,aes(speed_band,remoteness,fill=deaths)) +
+  geom_tile(colour='white',linewidth=1.3) +
+  geom_text(aes(label=label,colour=deaths>max(deaths)*.52),size=2.9,lineheight=1.0,fontface='bold') +
+  scale_colour_manual(values=c('FALSE'=navy,'TRUE'='white'),guide='none') +
+  scale_fill_gradient(low='#FCE4D8',high='#A73D1E') +
+  labs(title=wrap_title(sprintf('C1 | %.0f%% of deaths occurred outside major cities',regional_share),width=58),
+       subtitle='2017–2025 | Each tile: fatalities and share of ALL fatalities (including unknowns)',
+       x='Posted speed limit',y=NULL,fill='Deaths',caption=source_caption) + base_theme
+p <- p + guides(fill=guide_colourbar(barwidth=11,barheight=.55,
+                                          title.position='top')) +
+  theme(legend.position='bottom',legend.title=element_text(size=9),
+        axis.text.y=element_text(size=9),axis.text.x=element_text(size=10),
+        plot.title=element_text(size=15),plot.subtitle=element_text(size=9),
+        plot.margin=margin(24,40,26,30))
+save_plot(p,'C1_Remoteness_Speed_Heatmap',15,9)
+show_insight('C1  Geographic completeness and counts',core %>% count(remoteness_group))
+```
+
+**What the chart shows.** Each heatmap cell combines a remoteness category with a **posted speed-limit band**. Its text reports the fatality count and the percentage of **all 2017–2025 fatalities**, including records excluded from the heatmap because speed or location is unknown.
+
+**Interpretation and evidence.** Approximately **64% of recorded fatalities** in this period were classified as regional or remote. The concentration in higher posted speed bands within regional categories suggests that those road environments deserve attention in the next stage of analysis. Compare the darkest cells and their labelled percentages rather than assuming every regional road has the same pattern.
+
+**Contribution to the research question.** C1 answers **where** deaths are concentrated and connects geography with road environment. It supplies a concrete rationale for investigating regional road infrastructure, speed environments and exposure in future work.
+
+**Visual design.** A two dimensional heatmap reveals combinations that separate charts of remoteness and speed limit would obscure.
+
+**Interpretation caution.** Posted speed limit is not measured travel speed, speeding behaviour or proof of causation. Unknown records remain in the percentage denominator, and there is no vehicle kilometre denominator.
+
+
+```{r}
+# C2 — Annual city versus regional/remote trends 
+c2 <- core %>% filter(!is.na(remoteness_group)) %>% count(year,remoteness_group,name='deaths')
+last_c2 <- c2 %>% filter(year==max(year))
+p <- ggplot(c2,aes(year,deaths,colour=remoteness_group)) +
+  geom_line(linewidth=1.2) + geom_point(size=2.1) +
+  geom_label(data=last_c2,aes(label=fmt(deaths)),hjust=-.18,size=3.6,
+             label.size=0,fill='white',fontface='bold',show.legend=FALSE) +
+  scale_colour_manual(values=c('Major cities'=blue,'Regional and remote'=orange)) +
+  scale_x_continuous(breaks=2017:2025,limits=c(2017,2026)) +
+  scale_y_continuous(expand=expansion(mult=c(.06,.13))) +
+  labs(title='C2 | Regional and remote deaths exceed major city deaths',
+       subtitle='2017–2025 | Labels show 2025 fatality counts',
+       x=NULL,y='People killed',colour=NULL,caption=source_caption) + base_theme
+save_plot(p,'C2_City_Regional_Trend',12,7)
+show_insight('C2  Annual counts by location',c2)
+```
+
+**What the chart shows.** Two annual lines compare fatality **counts** in major cities and regional/remote areas from 2017 to 2025; the end labels identify the final year totals.
+
+**Interpretation and evidence.** Compare (1) which line is higher in 2025, (2) how far each line moves from its 2017 position, and (3) whether the gap widens or narrows. The accompanying PDF reports persistently substantial regional/remote totals alongside changes in city counts. Quote the exact 2025 values from the **C2 annual counts** table in the notebook.
+
+**Contribution to the research question.** C2 shows whether the **where** dimension is stable or changing over time. That matters because an intervention aimed only at historically high count regions could overlook an emerging urban increase.
+
+**Visual design.** A shared scale and endpoint labels make the relative size and direction of the two series visible.
+
+**Interpretation caution.** Records with unknown remoteness are excluded from these lines. Counts are not adjusted for population, traffic volume or travel distance.
+
+
+```{r}
+# C3 — Top 15 councils 
+# Assign council type from the remoteness of its recorded fatalities.
+# Mixed councils are labelled by the majority of known fatality records, NOT an official LGA classification.
+council_type <- core %>% filter(!is.na(lga),!is.na(remoteness_group)) %>%
+  count(state,lga,remoteness_group,name='n') %>%
+  group_by(state,lga) %>% slice_max(n,n=1,with_ties=FALSE) %>% ungroup() %>%
+  select(state,lga,remoteness_group)
+c3 <- core %>% filter(!is.na(lga)) %>% count(state,lga,name='deaths',sort=TRUE) %>%
+  slice_head(n=15) %>% left_join(council_type,by=c('state','lga')) %>%
+  mutate(remoteness_group=coalesce(remoteness_group,'Unclassified'),
+         label=paste0(lga,' (',state,')'))
+p <- ggplot(c3,aes(deaths,reorder(label,deaths),fill=remoteness_group)) +
+  geom_col(width=.56) + geom_text(aes(label=fmt(deaths)),hjust=-.20,size=3.2,fontface='bold',colour=navy) +
+  scale_fill_manual(values=c('Major cities'=blue,'Regional and remote'=orange,'Unclassified'='#9CA3AF')) +
+  scale_x_continuous(expand=expansion(mult=c(0,.19))) +
+  labs(title='C3 | Councils with the most recorded fatalities',
+       subtitle='2017–2025 | Colour reflects the majority remoteness category among recorded deaths in each LGA',
+       x='People killed',y=NULL,fill=NULL,caption=source_caption) + base_theme
+p <- p + theme(axis.text.y=element_text(size=10),plot.title=element_text(size=15),
+               plot.subtitle=element_text(size=9),plot.margin=margin(24,45,24,30))
+save_plot(p,'C3_Top_15_Councils',15,11)
+show_insight('C3  Top councils and assigned remoteness group',c3)
+```
+
+**What the chart shows.** The horizontal ranking lists the **15 councils with the highest recorded fatality counts** during 2017–2025. Bar colour indicates whether most of that council's *known remoteness fatality records* were classified as major city or regional/remote.
+
+**Interpretation and evidence.** The ranking reveals geographic concentrations that are hidden in national and state totals. The notes the prominence of several large Queensland councils. Read the counts directly and consider whether the top positions reflect large council areas and high traffic volumes as well as safety conditions.
+
+**Contribution to the research question.** C3 narrows **where should effort go first?** to named local government areas that merit closer examination, while making clear that high counts alone cannot rank the effectiveness of possible interventions.
+
+**Visual design.** Horizontal bars accommodate long council names; colour adds a second geographic dimension without requiring another plot.
+
+**Interpretation caution.** Colours are a **majority of records classification**, not an official classification of the entire council. Councils differ in size, population and traffic exposure.
+
+
+```{r}
+# C4 — INTERACTIVE top 40 councils 
+c4 <- core %>% filter(!is.na(lga)) %>% count(state,lga,name='deaths',sort=TRUE) %>% slice_head(n=40) %>%
+  mutate(label=paste0(lga,' (',state,')'))
+interactive_C4 <- plotly::plot_ly(c4,x=~deaths,y=~reorder(label,deaths),type='bar',orientation='h',marker=list(color=blue),
+  text=~paste0('Council: ',lga,'<br>State: ',state,'<br>Deaths: ',deaths),hoverinfo='text') %>%
+  plotly::layout(title='C4  Explore the top 40 council areas, 2017–2025',xaxis=list(title='People killed'),yaxis=list(title='',automargin=TRUE),margin=list(l=180))
+htmlwidgets::saveWidget(interactive_C4,file.path(out,'C4_Interactive_Councils.html'),selfcontained=FALSE)
+print(interactive_C4)
+```
+
+**What the chart shows.** An interactive ranking extends the static council comparison to the **top 40 councils**, allowing readers to hover for counts and state details.
+
+**Interpretation and evidence.** Use this figure to test whether the top 15 story in C3 persists beyond the most prominent councils. In a live demonstration, select one council outside the top 15 and compare its fatality count with a leading council; this shows why the ranking is a starting point for local investigation rather than a complete geographic risk assessment.
+
+**Contribution to the research question.** C4 makes the **where** finding explorable and supports the practical decision of which local areas should receive more detailed, exposure-adjusted analysis.
+
+**Visual design.** Hover details reduce label clutter while retaining access to exact counts.
+
+**Interpretation caution.** This is an area-level ranking, **not** a map of exact crash locations. Council size and road usage differ substantially.
+
+
+## D. When do fatalities occur?
+
+```{r}
+# D1 — Weekday x hour heatmap
+d1 <- core %>% filter(!is.na(dayweek),!is.na(crash_hour),between(crash_hour,0,23)) %>%
+  count(dayweek,crash_hour,name='deaths') %>% complete(dayweek,crash_hour=0:23,fill=list(deaths=0))
+p <- ggplot(d1,aes(crash_hour,dayweek,fill=deaths)) + geom_tile(colour='white',linewidth=.15) +
+  scale_y_discrete(limits=rev(levels(core$dayweek))) +
+  scale_x_continuous(breaks=seq(0,23,3),labels=function(x)sprintf('%02d:00',x)) +
+  scale_fill_gradient(low='#FBE9E1',high='#9F371C') +
+  labs(title='D1 | Road deaths vary by weekday and crash hour',subtitle='Fatalities by weekday × hour, 2017–2025 | Each cell counts people killed',x='Hour of crash',y=NULL,fill='Deaths',caption=source_caption) + base_theme
+save_plot(p,'D1_Weekday_Hour_Heatmap',12,5.5)
+```
+
+**What the chart shows.** The heatmap crosses **seven weekdays** with **24 crash hours**. Darker cells represent more fatalities recorded at that weekday hour combination over 2017–2025.
+
+**Interpretation and evidence.** The PDF identifies afternoon concentrations, including Friday afternoon. Check the darkest cells and read their underlying counts to explain the main peaks. The pattern indicates **when fatal events accumulate**, which can help formulate questions about commuting, recreation and enforcement schedules, but the chart does not test those explanations.
+
+**Contribution to the research question.** D1 answers **when** deaths occur and identifies time windows for more targeted investigation, complementing the demographic and geographic results.
+
+**Visual design.** A weekday-by-hour matrix exposes recurring combinations more clearly than separate hourly and weekday bar charts.
+
+**Interpretation caution.** A high count may reflect higher traffic exposure during that hour rather than greater danger per journey.
+
+
+```{r}
+# D2 — Road-user timing: weekday versus weekend, normalised within each group 
+d2 <- core %>% filter(!is.na(crash_hour),between(crash_hour,0,23),!is.na(dayweek),
+  road_user_group %in% c('Driver','Passenger','Motorcyclist','Pedestrian')) %>%
+  mutate(day_type=if_else(dayweek %in% c('Saturday','Sunday'),'Weekend','Weekday')) %>%
+  count(road_user_group,day_type,crash_hour,name='deaths') %>%
+  tidyr::complete(road_user_group,day_type,crash_hour=0:23,fill=list(deaths=0)) %>%
+  group_by(road_user_group,day_type) %>%
+  mutate(share=if(sum(deaths)>0) deaths/sum(deaths) else rep(0,n())) %>% ungroup()
+p <- ggplot(d2,aes(crash_hour,share*100,colour=day_type)) +
+  geom_line(linewidth=1.1) + facet_wrap(~road_user_group,ncol=2) +
+  scale_colour_manual(values=c('Weekday'=blue,'Weekend'=orange)) +
+  scale_x_continuous(breaks=seq(0,23,3)) +
+  scale_y_continuous(labels=scales::label_number(suffix='%'),expand=expansion(mult=c(.02,.12))) +
+  labs(title='D2 | Timing patterns differ by road user type',
+       subtitle='2017–2025 | Each weekday/weekend line sums to 100% within its road user group',
+       x='Crash hour',y='Fatalities (%)',colour=NULL,
+       caption=source_caption) + base_theme + theme(legend.position='top')
+p <- p + theme(axis.title.y=element_text(size=10,margin=margin(r=10)),
+               axis.text.y=element_text(size=9),strip.text=element_text(size=10),
+               strip.background=element_rect(fill='#EFF4FA',colour=NA),
+               panel.spacing=grid::unit(1.35,'lines'),
+               plot.title=element_text(size=15),plot.subtitle=element_text(size=9),
+               plot.margin=margin(24,35,26,34))
+save_plot(p,'D2_Road_User_Timing',15,10)
+show_insight('D2 — Highest-share hours',d2 %>% group_by(road_user_group,day_type) %>%
+  slice_max(share,n=1,with_ties=FALSE) %>% ungroup() %>% select(road_user_group,day_type,crash_hour,share))
+```
+
+**What the chart shows.** For each road user group, the visual compares the **hourly share of that group's weekday fatalities** with the **hourly share of that group's weekend fatalities**. Each day type distribution is normalised separately.
+
+**Interpretation and evidence.** The PDF describes a weekend late-morning/afternoon concentration for motorcyclists and more evening activity for pedestrians. Use the chart to locate each group's highest share hours, and the printed **D2 highest share hours** table to quote them accurately. A 10% cell means 10% of fatalities in that specific road user/day type category occurred at that hour's not 10% of all road deaths.
+
+**Contribution to the research question.** D2 shows that the answer to **when** depends on **who**. It therefore supports more tailored questions about the timing of roadsafety activities rather than a single universal 'dangerous hour'.
+
+**Visual design.** Normalisation makes the **shape of timing patterns** comparable even when categories contain very different total deaths.
+
+**Interpretation caution.** Normalised shares do not compare the number of deaths or risk per trip across groups; weekday and weekend exposure also differs.
+
+
+```{r}
+# D3 — Holiday comparison, deaths PER DAY
+# Christmas: 12 days per year; Easter: 5 days per year.
+# The Christmas/Easter flags must be verified against the BITRE data dictionary.
+make_holiday <- function(start,end){
+  years <- start:end
+  all_days <- sum(as.integer(as.Date(sprintf('%d-01-01',years+1))-
+                             as.Date(sprintf('%d-01-01',years))))
+  christmas_days <- length(years)*12
+  easter_days <- length(years)*5
+  period_days <- tibble(period=c('Christmas','Easter','Other days'),
+                       days=c(christmas_days,easter_days,all_days-christmas_days-easter_days))
+  fatal %>% filter(between(year,start,end)) %>%
+    mutate(period=case_when(christmas_period=='Yes'~'Christmas',
+                            easter_period=='Yes'~'Easter',TRUE~'Other days')) %>%
+    count(period,name='deaths') %>%
+    right_join(period_days,by='period') %>% mutate(deaths=coalesce(deaths,0L),per_day=deaths/days,
+                                                  analysis_period=paste0(start,'–',end))
+}
+holiday <- bind_rows(make_holiday(1989,2016),make_holiday(2017,2025)) %>%
+  group_by(analysis_period) %>%
+  mutate(other_rate=per_day[period=='Other days'][1],
+         diff_pct=100*(per_day/other_rate-1),
+         label=if_else(period=='Other days',sprintf('%.2f (ref.)',per_day),
+                       sprintf('%.2f (%+.0f%%)',per_day,diff_pct))) %>% ungroup()
+p <- ggplot(holiday,aes(per_day,reorder(period,per_day))) +
+  geom_segment(aes(x=0,xend=per_day,yend=reorder(period,per_day)),colour=orange,linewidth=1.2) +
+  geom_point(colour=orange,size=4) +
+  geom_text(aes(label=label),hjust=-0.15,size=3.1,fontface='bold',colour=navy) +
+  facet_wrap(~analysis_period,ncol=2,scales='free_x') +
+  scale_x_continuous(expand=expansion(mult=c(0,.85))) +
+  labs(title='D3 | Are holiday periods deadlier per calendar day?',
+       subtitle='Deaths per day and % difference from other days in the same period | Assumed holiday windows',
+       x='Fatalities per calendar day',y=NULL,
+       caption=paste(source_caption,'| Verify Christmas/Easter flag windows before publication')) + base_theme +
+  theme(panel.spacing.x=grid::unit(1.6,'lines'),
+        plot.margin=margin(22,34,28,28),
+        strip.text=element_text(size=11))
+save_plot(p,'D3_Holiday_Deaths_Per_Day',16,7)
+show_insight('D3  Period comparison and denominator checks',holiday)
+```
+
+**What the chart shows.** Separate panels compare **1989–2016** and **2017–2025**. Within each period, bars report average **fatalities per calendar day** during the Christmas and Easter windows and on other days. Labels give the percentage difference relative to **other days in the same period**.
+
+**Interpretation and evidence.** A label such as **4.87 (+5%)** means an average of 4.87 fatalities per day, approximately 5% above the corresponding other day average; a negative percentage means fewer deaths per day. Compare both the absolute daily levels and the signed percentages across periods to see whether the holiday difference has changed. Read the computed **D3 period comparison** table for the actual results.
+
+**Contribution to the research question.** D3 tests whether the **when** dimension includes distinct holiday periods and whether that relationship persists in the more recent years. It informs what additional seasonal and exposure data should be examined.
+
+**Visual design.** A per day denominator makes holiday windows of different lengths more comparable than raw totals.
+
+**Interpretation caution.** The notebook assumes 12 Christmas days and five Easter days per year. Verify that the BITRE holiday flags use these same windows before reporting exact rates or percentage differences.
+
+
+## E. Which groups account for the most deaths?
+
+```{r}
+# E1 — Top 12 combinations: road user x age x city/country (PDF p.18)
+e1_all <- core %>% filter(!is.na(road_user_group),!is.na(age_group),!is.na(remoteness_group)) %>%
+  count(road_user_group,age_group,remoteness_group,name='deaths',sort=TRUE) %>%
+  mutate(share=deaths/nrow(core),cumulative=cumsum(share))
+e1 <- e1_all %>% slice_head(n=12) %>%
+  mutate(label=paste(road_user_group,age_group,remoteness_group,sep=' · '),
+         annotation=paste0(fmt(deaths),' (',scales::percent(share,accuracy=.1),
+                           '; cumulative ',scales::percent(cumulative,accuracy=.1),')'))
+p <- ggplot(e1,aes(deaths,reorder(label,deaths),colour=remoteness_group)) +
+  geom_segment(aes(x=0,xend=deaths,yend=reorder(label,deaths)),linewidth=.85) +
+  geom_point(size=3.8) +
+  geom_text(aes(label=annotation),hjust=-.12,size=2.9,colour=navy) +
+  scale_colour_manual(values=c('Major cities'=blue,'Regional and remote'=orange)) +
+  scale_x_continuous(expand=expansion(mult=c(0,.90))) +
+  labs(title='E1 | Which demographic location groups account for the most deaths?',
+       subtitle='Top 12 combinations, 2017–2025 | Label = fatalities (share of all; cumulative share)',
+       x='People killed',y=NULL,colour=NULL,caption=source_caption) + base_theme
+p <- p + theme(axis.text.y=element_text(size=10),plot.title=element_text(size=15),
+               plot.subtitle=element_text(size=10),plot.margin=margin(26,50,25,32))
+save_plot(p,'E1_Priority_Groups',19,13)
+show_insight('E1 — Top 12 group shares and cumulative percentages',e1)
+```
+
+**What the chart shows.** The lollipop ranking identifies the **12 largest combinations** of road user group, age group and major city versus regional/remote classification in 2017–2025. Each label shows deaths, share of **all core period fatalities**, and the **cumulative share** accounted for by that row and all higher ranked rows.
+
+**Interpretation and evidence.** The highest ranked combination accounts for the largest single share of deaths among the defined groups. Moving down the chart, the cumulative percentage shows how much of the overall fatality burden is covered by a shortlist of groups. Read the final top 12 cumulative percentage from the **E1 evidence table**; do not assume that the unlisted groups are unimportant.
+
+**Contribution to the research question.** E1 synthesises **who** and **where** into candidate areas for further road safety investigation. It closes the story by turning the earlier descriptive findings into a transparent, evidence based shortlist not a claim that the top group is necessarily the highest risk group.
+
+**Visual design.** Ordered dots and cumulative percentages communicate both individual contribution and collective coverage.
+
+**Interpretation caution.** A large count is not the same as high exposure adjusted risk, causal importance, or proven benefit from an intervention.
+
+
+**Main-question conclusion:** Together the charts show that Australia's recent fatality trend is inconsistent with a simple continued decline towards the 2030 goal, and that deaths are unevenly distributed across demographic groups, geography and time. These patterns help identify **where to investigate**, not which factors *caused* the deaths or which interventions will work.
