@@ -68,6 +68,3 @@ A data visualisation project analysing every road death recorded in Australia fr
 
 Group 7, STAT8124, Macquarie University.
 
-## Licence
-
-Code in this repository is released under the [MIT License](LICENSE). The underlying data remain © Commonwealth of Australia (BITRE) under CC BY 3.0 AU.
